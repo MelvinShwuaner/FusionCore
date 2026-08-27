@@ -4,7 +4,8 @@ import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
+import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager.NameNotFoundException;
 import android.os.Bundle;
 import android.os.Environment;
 import android.os.Looper;
@@ -14,6 +15,8 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AppCompatActivity;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -21,7 +24,18 @@ import java.io.IOException;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-public class BootstrapActivity extends Activity {
+import dev.allofus.fusioncore.hooks.ClassLoaderHooks;
+import dev.allofus.fusioncore.hooks.InstrumentationHooks;
+import dev.allofus.fusioncore.hooks.PackageManagerHooks;
+import dev.allofus.fusioncore.hooks.UnityPlayerHooks;
+import dev.allofus.fusioncore.tools.FusionConfig;
+import dev.allofus.fusioncore.tools.FusionConfigStore;
+import dev.allofus.fusioncore.tools.LibUnityDownloader;
+import dev.allofus.fusioncore.tools.NativeLibraryManager;
+import dev.allofus.fusioncore.tools.Utilities;
+import dev.allofus.fusioncore.tools.VersionLookup;
+
+public class BootstrapActivity extends AppCompatActivity {
 
     private static final String TAG = "FusionCore";
 
@@ -75,6 +89,8 @@ public class BootstrapActivity extends Activity {
             return;
         }
 
+        final int targetOrientation = resolveTargetOrientation(launcher);
+
         Context gameContext;
         try {
             gameContext = createPackageContext(targetPackage, CONTEXT_IGNORE_SECURITY | CONTEXT_INCLUDE_CODE);
@@ -113,20 +129,18 @@ public class BootstrapActivity extends Activity {
         try {
             setPhaseStatus(getString(R.string.bootstrap_status_launching));
             initializeFusion(launcherClassName, targetPackage);
-
-            var activityInfo = getPackageManager().getActivityInfo(launcher, 0);
-            int targetOrientation = activityInfo.screenOrientation;
-
             runOnMainThread(() -> {
                 try {
                     var intent = new Intent(this, launcherClass);
+                    intent.putExtra(InstrumentationHooks.EXTRA_TARGET_ORIENTATION, targetOrientation);
 
                     // Using the stub activity intent here avoids one extra layer of hooks running.
                     // Its not necessary but could be more performant.
                     var intentWrapped = new Intent(this, StubActivity.class);
                     intentWrapped.putExtra(InstrumentationHooks.EXTRA_IS_DYNAMIC_ACTIVITY, true);
                     intentWrapped.putExtra(InstrumentationHooks.EXTRA_ORIGINAL_INTENT, intent);
-                    intentWrapped.putExtra(InstrumentationHooks.EXTRA_ORIENTATION, targetOrientation);
+                    intentWrapped.putExtra(InstrumentationHooks.EXTRA_TARGET_ORIENTATION, targetOrientation);
+
                     startActivity(intentWrapped);
                     finish();
                 } catch (Throwable t) {
@@ -379,6 +393,19 @@ public class BootstrapActivity extends Activity {
     }
 
     private record PreparedFusionState(String targetPackage, FusionConfig config) {    }
+
+    private int resolveTargetOrientation(ComponentName launcher) {
+        try {
+            ActivityInfo info = getPackageManager().getActivityInfo(launcher, 0);
+            if (info.screenOrientation == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                Log.i(TAG, "Target orientation unspecified; defaulting to landscape");
+                return ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+            }
+            return info.screenOrientation;
+        } catch (NameNotFoundException e) {
+            return ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE;
+        }
+    }
 
     private String resolveTargetGameAbi(String gameLibDir) {
         if (gameLibDir == null || gameLibDir.isEmpty()) {

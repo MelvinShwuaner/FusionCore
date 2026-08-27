@@ -1,10 +1,10 @@
 package dev.allofus.fusioncore;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
 import android.os.Build;
@@ -23,14 +23,22 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.zip.ZipFile;
 
-public class SelectorActivity extends Activity {
+import dev.allofus.fusioncore.tools.Utilities;
+
+public class SelectorActivity extends AppCompatActivity {
     private static final String TAG = "FusionCore";
     private static final int REQUEST_MANAGE_EXTERNAL_STORAGE = 1001;
+    private static final String[] UNITY_ABIS = {"arm64-v8a", "armeabi-v7a", "x86_64", "x86"};
 
     private String pendingLaunchPackage;
 
@@ -78,18 +86,21 @@ public class SelectorActivity extends Activity {
                     holder.name.setText(entry.label);
                     holder.packageName.setText(entry.packageName);
                     holder.version.setText(Utilities.formatVersionText(entry.versionName, entry.versionCode));
+
+                    ImageButton settingsButton = convertView.findViewById(R.id.selector_action_settings);
+                    settingsButton.setOnClickListener(v -> {
+                        var intent = new Intent(getContext(), GameSettingsActivity.class);
+                        intent.putExtra(GameSettingsActivity.EXTRA_PACKAGE_NAME, entry.packageName);
+                        startActivity(intent);
+                    });
+
+                    convertView.setOnClickListener((v) -> maybeLaunchBootstrap(entry.packageName));
                 }
+
                 return convertView;
             }
         };
         listView.setAdapter(adapter);
-        listView.setOnItemClickListener((parent, view, position, id) -> {
-            AppEntry selected = installedTargets.get(position);
-            maybeLaunchBootstrap(selected.packageName);
-        });
-
-        ImageButton settingsButton = findViewById(R.id.selector_action_settings);
-        settingsButton.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
     }
 
     @Override
@@ -123,35 +134,50 @@ public class SelectorActivity extends Activity {
     private List<AppEntry> resolveInstalledTargets() {
         PackageManager pm = getPackageManager();
         List<AppEntry> result = new ArrayList<>();
-        List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
+        Set<String> seenPackages = new HashSet<>();
 
-        for (ApplicationInfo app : apps) {
-            File libs = new File(app.nativeLibraryDir);
-            File unity = new File(libs, "libunity.so");
-            File il2cpp = new File(libs, "libil2cpp.so");
+        Intent launchIntent = new Intent(Intent.ACTION_MAIN);
+        launchIntent.addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> activities = pm.queryIntentActivities(launchIntent, PackageManager.MATCH_ALL);
 
-            if (!unity.exists() || !il2cpp.exists()) {
+        for (ResolveInfo resolveInfo : activities) {
+            String packageName = resolveInfo.activityInfo.packageName;
+            if (packageName == null || !seenPackages.add(packageName)) {
+                continue;
+            }
+            if (packageName.equals(getPackageName())) {
                 continue;
             }
 
-            if (pm.getLaunchIntentForPackage(app.packageName) == null) {
+            ApplicationInfo info;
+            try {
+                info = pm.getApplicationInfo(packageName, 0);
+            } 
+            catch (PackageManager.NameNotFoundException e) {
                 continue;
             }
 
-            String label = app.packageName;
+            if ((info.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
+                continue;
+            }
+
+            if (!hasIl2Cpp(info)) {
+                continue;
+            }
+
+            String label = packageName;
             Drawable icon = pm.getDefaultActivityIcon();
             String versionName = "Unknown";
             long versionCode = 0L;
             try {
-                ApplicationInfo info = pm.getApplicationInfo(app.packageName, 0);
                 label = pm.getApplicationLabel(info).toString();
                 icon = pm.getApplicationIcon(info);
 
                 PackageInfo packageInfo;
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    packageInfo = pm.getPackageInfo(app.packageName, PackageManager.PackageInfoFlags.of(0));
+                    packageInfo = pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0));
                 } else {
-                    packageInfo = pm.getPackageInfo(app.packageName, 0);
+                    packageInfo = pm.getPackageInfo(packageName, 0);
                 }
                 if (packageInfo.versionName != null && !packageInfo.versionName.isEmpty()) {
                     versionName = packageInfo.versionName;
@@ -159,28 +185,79 @@ public class SelectorActivity extends Activity {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     versionCode = packageInfo.getLongVersionCode();
                 } else {
+                    //noinspection deprecation
                     versionCode = packageInfo.versionCode;
                 }
             } catch (Exception e) {
-                Log.w(TAG, "Failed to resolve metadata for package: " + app.packageName, e);
+                Log.w(TAG, "Failed to resolve metadata for package: " + packageName, e);
             }
 
-            Log.i(TAG, "Found installed target: " + app.packageName + " (" + label + ")");
-            result.add(new AppEntry(app.packageName, label, icon, versionName, versionCode));
+            Log.i(TAG, "Found installed target: " + packageName + " (" + label + ")");
+            result.add(new AppEntry(packageName, label, icon, versionName, versionCode));
         }
 
         return result;
+    }
+
+    private static boolean hasIl2Cpp(ApplicationInfo info) {
+        List<String> apkPaths = new ArrayList<>();
+        if (info.sourceDir != null) {
+            apkPaths.add(info.sourceDir);
+        }
+        if (info.splitSourceDirs != null) {
+            Collections.addAll(apkPaths, info.splitSourceDirs);
+        }
+        for (String apk : apkPaths) {
+            if (apkContainsIl2Cpp(apk)) {
+                return true;
+            }
+        }
+
+        String nativeDir = info.nativeLibraryDir;
+        if (nativeDir != null && !nativeDir.isEmpty()) {
+            File dir = new File(nativeDir);
+            if (new File(dir, "libil2cpp.so").exists()) {
+                return true;
+            }
+            File[] abiDirs = dir.listFiles();
+            if (abiDirs != null) {
+                for (File abiDir : abiDirs) {
+                    if (abiDir.isDirectory() && new File(abiDir, "libil2cpp.so").exists()) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean apkContainsIl2Cpp(String apkPath) {
+        try {
+            try (ZipFile zip = new ZipFile(apkPath)) {
+                for (String abi : UNITY_ABIS) {
+                    if (zip.getEntry("lib/" + abi + "/libil2cpp.so") != null) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            // Unreadable APK; fall through to the nativeLibraryDir check.
+        }
+        return false;
     }
 
     private void launchBootstrap(String packageName) {
         Intent intent = new Intent(this, BootstrapActivity.class);
         intent.putExtra(BootstrapActivity.EXTRA_TARGET_PACKAGE, packageName);
         intent.putExtra(BootstrapActivity.EXTRA_USE_ORIGINAL_LIBUNITY,
-                !FusionSettings.isDownloadUnstrippedLibUnity(this));
+                !FusionSettings.getUseUnstrippedLibUnityForGame(this, packageName));
         intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
         startActivity(intent);
+        //noinspection deprecation
         overridePendingTransition(0, 0);
         finish();
+        //noinspection deprecation
         overridePendingTransition(0, 0);
     }
 

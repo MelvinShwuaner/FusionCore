@@ -1,13 +1,17 @@
-package dev.allofus.fusioncore;
+package dev.allofus.fusioncore.hooks;
 
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.os.Bundle;
 import android.util.Log;
 
 import java.lang.reflect.Method;
 
+import dev.allofus.fusioncore.BuildConfig;
+import dev.allofus.fusioncore.StubActivity;
 import top.canyie.pine.Pine;
 import top.canyie.pine.callback.MethodHook;
 
@@ -18,9 +22,10 @@ import top.canyie.pine.callback.MethodHook;
 public class InstrumentationHooks {
 
     private static final String TAG = "InstrumentationHooks";
-    public static final String EXTRA_ORIENTATION = "fusioncore.target_orientation";
+
     public static final String EXTRA_IS_DYNAMIC_ACTIVITY = "fusioncore.is_dynamic_activity";
     public static final String EXTRA_ORIGINAL_INTENT = "fusioncore.original_intent";
+    public static final String EXTRA_TARGET_ORIENTATION = "fusioncore.target_orientation";
 
     public static boolean areHooksInstalled = false;
 
@@ -43,10 +48,8 @@ public class InstrumentationHooks {
                 @Override public void beforeCall(Pine.CallFrame callFrame) { handleNewActivityBeforeCall(callFrame); }
             });
 
-            // Apply orientation if specified in the intent.
-            hookAllMethodsByName(instrumentationClass, "callActivityOnCreate", new MethodHook() {
-                @Override public void beforeCall(Pine.CallFrame callFrame) { handleCallActivityOnCreateBeforeCall(callFrame); }
-            });
+            hookActivityOnCreate();
+
             areHooksInstalled = true;
             Log.d(TAG, "Successfully installed Instrumentation hooks");
         } catch (Exception e) {
@@ -68,24 +71,51 @@ public class InstrumentationHooks {
         }
     }
 
-    private static void handleCallActivityOnCreateBeforeCall(Pine.CallFrame callFrame) {
-        try {
-            if (callFrame.args == null || callFrame.args.length == 0) return;
-            Object arg0 = callFrame.args[0];
-            if (!(arg0 instanceof Activity)) return;
-
-            Activity activity = (Activity) arg0;
-            Intent intent = activity.getIntent();
-            if (intent != null && intent.hasExtra(EXTRA_ORIENTATION)) {
-                int orientation = intent.getIntExtra(EXTRA_ORIENTATION, -1);
-                if (orientation != -1) {
-                    activity.setRequestedOrientation(orientation);
-                    Log.d(TAG, "Applied target orientation " + orientation + " to " + activity.getClass().getName());
+    private static void hookActivityOnCreate() throws NoSuchMethodException {
+        MethodHook orientationHook = new MethodHook() {
+            @Override public void beforeCall(Pine.CallFrame callFrame) {
+                if (!(callFrame.thisObject instanceof Activity)) {
+                    return;
                 }
+                applyTargetOrientation((Activity) callFrame.thisObject);
             }
+        };
+        Method onCreate = Activity.class.getDeclaredMethod("onCreate", Bundle.class);
+        Pine.hook(onCreate, orientationHook);
+        Method onResume = Activity.class.getDeclaredMethod("onResume");
+        Pine.hook(onResume, orientationHook);
+    }
+
+    private static void applyTargetOrientation(Activity activity) {
+        try {
+            Intent intent = activity.getIntent();
+            if (intent == null) {
+                return;
+            }
+            int orientation = readTargetOrientation(intent);
+            if (orientation == ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+                return;
+            }
+            activity.setRequestedOrientation(orientation);
+            Log.i(TAG, "Applied target orientation " + orientation
+                    + " to " + activity.getClass().getName());
         } catch (Exception e) {
-            Log.e(TAG, "Error in callActivityOnCreate beforeCall", e);
+            Log.e(TAG, "Failed to apply target orientation", e);
         }
+    }
+
+    private static int readTargetOrientation(Intent intent) {
+        int orientation = intent.getIntExtra(EXTRA_TARGET_ORIENTATION,
+                ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        if (orientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+            return orientation;
+        }
+        Intent original = resolveOriginalIntent(intent);
+        if (original != null) {
+            return original.getIntExtra(EXTRA_TARGET_ORIENTATION,
+                    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+        }
+        return ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
     }
 
     private static void handleExecStartBeforeCall(Pine.CallFrame callFrame) {

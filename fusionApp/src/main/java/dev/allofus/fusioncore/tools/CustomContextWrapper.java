@@ -1,4 +1,4 @@
-package dev.allofus.fusioncore;
+package dev.allofus.fusioncore.tools;
 
 import android.content.Context;
 import android.content.ContextWrapper;
@@ -22,6 +22,10 @@ public class CustomContextWrapper extends ContextWrapper {
         // this prevents the game from resolving its own libraries
         // that way we can override them properly with our own versions
         this.getApplicationInfo().nativeLibraryDir = "";
+    }
+
+    public Context getOriginalActivity() {
+        return fusionContext;
     }
 
 //    @Override
