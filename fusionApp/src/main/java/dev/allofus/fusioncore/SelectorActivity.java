@@ -10,6 +10,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
 import android.provider.Settings;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -22,14 +23,18 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.zip.ZipFile;
 
@@ -51,6 +56,16 @@ public class SelectorActivity extends AppCompatActivity {
         int basePadding = Math.round(getResources().getDisplayMetrics().density * 16f);
         Utilities.applyWindowInsets(root, basePadding);
 
+        var handler = new Handler(getMainLooper());
+        handler.postDelayed(()->{
+            populateList();
+            if (!hasExternalStorageManagerAccess()) {
+                requestExternalStorageManagerAccess();
+            }
+        }, 100);
+    }
+
+    private void populateList() {
         ListView listView = findViewById(R.id.selector_list);
         TextView emptyView = findViewById(R.id.selector_empty);
         listView.setEmptyView(emptyView);
@@ -94,6 +109,33 @@ public class SelectorActivity extends AppCompatActivity {
                         startActivity(intent);
                     });
 
+                    ImageButton folderButton = convertView.findViewById(R.id.selector_action_folder);
+                    folderButton.setOnClickListener(v -> {
+                        File baseDir = new File(Environment.getExternalStorageDirectory(), "FusionCore");
+                        File folder = new File(baseDir, entry.packageName);
+
+                        if (!folder.exists() && !folder.mkdirs()) {
+                            String message = "Failed to make folder: " + folder.getAbsolutePath();
+                            Toast.makeText(getContext(), message, Toast.LENGTH_LONG).show();
+                            Log.e(TAG, message);
+                            return;
+                        }
+
+                        try {
+                            String relativePath = "FusionCore/" + entry.packageName;
+                            Uri directoryUri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3A" + Uri.encode(relativePath));
+
+                            Intent intent = new Intent(Intent.ACTION_VIEW);
+                            intent.setDataAndType(directoryUri, "vnd.android.document/directory");
+                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+
+                            startActivity(intent);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Unable to open folder", e);
+                            Toast.makeText(getContext(), "No file manager found capable of opening this directory", Toast.LENGTH_LONG).show();
+                        }
+                    });
+
                     convertView.setOnClickListener((v) -> maybeLaunchBootstrap(entry.packageName));
                 }
 
@@ -101,6 +143,7 @@ public class SelectorActivity extends AppCompatActivity {
             }
         };
         listView.setAdapter(adapter);
+        findViewById(R.id.selector_loading).setVisibility(View.GONE);
     }
 
     @Override
@@ -252,7 +295,7 @@ public class SelectorActivity extends AppCompatActivity {
         intent.putExtra(BootstrapActivity.EXTRA_TARGET_PACKAGE, packageName);
         intent.putExtra(BootstrapActivity.EXTRA_USE_ORIGINAL_LIBUNITY,
                 !FusionSettings.getUseUnstrippedLibUnityForGame(this, packageName));
-        intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION | Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         startActivity(intent);
         //noinspection deprecation
         overridePendingTransition(0, 0);
@@ -261,12 +304,52 @@ public class SelectorActivity extends AppCompatActivity {
         overridePendingTransition(0, 0);
     }
 
+    private final ActivityResultLauncher<String[]> requestPermissionsLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), isGrantedMap -> {
+                for (Map.Entry<String, Boolean> entry : isGrantedMap.entrySet()) {
+                    String permission = entry.getKey();
+                    boolean isGranted = entry.getValue();
+
+                    if (isGranted) {
+                        Log.i(TAG, "Got permission: " +permission);
+                    } else {
+                        Log.e(TAG, "Permission denied: " +permission);
+                    }
+
+                    String packageName = pendingLaunchPackage;
+                    pendingLaunchPackage = null;
+                    launchBootstrap(packageName);
+                }
+            });
+
     private void maybeLaunchBootstrap(String packageName) {
         if (!hasExternalStorageManagerAccess()) {
             pendingLaunchPackage = packageName;
             requestExternalStorageManagerAccess();
             return;
         }
+
+        try {
+            var packageInfo = getPackageManager().getPackageInfo(packageName, PackageManager.GET_PERMISSIONS);
+            var perms = packageInfo.requestedPermissions;
+            if (perms != null) {
+                ArrayList<String> newPerms = new ArrayList<>();
+                for (var p : perms) {
+                    if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED) {
+                        newPerms.add(p);
+                    }
+                }
+
+                if (!newPerms.isEmpty()) {
+                    pendingLaunchPackage = packageName;
+                    requestPermissionsLauncher.launch(newPerms.toArray(new String[0]));
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failure getting package info for " + packageName, e);
+        }
+
         launchBootstrap(packageName);
     }
 

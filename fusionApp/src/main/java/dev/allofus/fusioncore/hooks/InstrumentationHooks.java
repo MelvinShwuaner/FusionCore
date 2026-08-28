@@ -3,14 +3,21 @@ package dev.allofus.fusioncore.hooks;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.ContextThemeWrapper;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
 
 import java.lang.reflect.Method;
+import java.util.Arrays;
 
 import dev.allofus.fusioncore.BuildConfig;
+import dev.allofus.fusioncore.R;
 import dev.allofus.fusioncore.StubActivity;
 import top.canyie.pine.Pine;
 import top.canyie.pine.callback.MethodHook;
@@ -29,7 +36,7 @@ public class InstrumentationHooks {
 
     public static boolean areHooksInstalled = false;
 
-    public static void install() {
+    public static void install(Context fusionContext) {
         if (areHooksInstalled) {
             Log.d(TAG, "Instrumentation hooks already installed");
             return;
@@ -48,7 +55,7 @@ public class InstrumentationHooks {
                 @Override public void beforeCall(Pine.CallFrame callFrame) { handleNewActivityBeforeCall(callFrame); }
             });
 
-            hookActivityOnCreate();
+            hookActivityOnCreate(fusionContext);
 
             areHooksInstalled = true;
             Log.d(TAG, "Successfully installed Instrumentation hooks");
@@ -71,7 +78,7 @@ public class InstrumentationHooks {
         }
     }
 
-    private static void hookActivityOnCreate() throws NoSuchMethodException {
+    private static void hookActivityOnCreate(Context fusionContext) throws NoSuchMethodException {
         MethodHook orientationHook = new MethodHook() {
             @Override public void beforeCall(Pine.CallFrame callFrame) {
                 if (!(callFrame.thisObject instanceof Activity)) {
@@ -80,8 +87,26 @@ public class InstrumentationHooks {
                 applyTargetOrientation((Activity) callFrame.thisObject);
             }
         };
+
+        MethodHook loadingViewHook = new MethodHook() {
+            @Override
+            public void afterCall(Pine.CallFrame callFrame) throws Throwable {
+                if (!(callFrame.thisObject instanceof Activity activity)) {
+                    return;
+                }
+
+                ViewGroup decorView = (ViewGroup) activity.getWindow().getDecorView();
+                Context themedFusionContext = new ContextThemeWrapper(fusionContext, androidx.appcompat.R.style.Theme_AppCompat);
+                LayoutInflater inflater = LayoutInflater.from(themedFusionContext);
+                View loadingView = inflater.inflate(R.layout.loading_view, decorView, false);
+                decorView.addView(loadingView);
+            }
+        };
+
         Method onCreate = Activity.class.getDeclaredMethod("onCreate", Bundle.class);
         Pine.hook(onCreate, orientationHook);
+        Pine.hook(onCreate, loadingViewHook);
+
         Method onResume = Activity.class.getDeclaredMethod("onResume");
         Pine.hook(onResume, orientationHook);
     }
@@ -120,6 +145,7 @@ public class InstrumentationHooks {
 
     private static void handleExecStartBeforeCall(Pine.CallFrame callFrame) {
         try {
+            Log.i(TAG, "handling exec start for " + Arrays.toString(callFrame.args));
             int intentIdx = -1;
 
             if (callFrame.args != null) {
@@ -138,8 +164,13 @@ public class InstrumentationHooks {
                 }
 
                 Intent intent = (Intent) callFrame.args[intentIdx];
-                if (intent == null || intent.getComponent() == null) {
-                    Log.e(TAG, "Intent or Intent component was null!");
+                if (intent == null) {
+                    Log.e(TAG, "Intent was null!");
+                    return;
+                }
+
+                if (intent.getComponent() == null) {
+                    Log.d(TAG, "execStartActivity: Passing through implicit intent (action=" + intent.getAction() + ")");
                     return;
                 }
 

@@ -1,6 +1,5 @@
 package dev.allofus.fusioncore;
 
-import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -27,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import dev.allofus.fusioncore.hooks.ClassLoaderHooks;
 import dev.allofus.fusioncore.hooks.InstrumentationHooks;
 import dev.allofus.fusioncore.hooks.PackageManagerHooks;
+import dev.allofus.fusioncore.hooks.ResourceHooks;
 import dev.allofus.fusioncore.hooks.UnityPlayerHooks;
 import dev.allofus.fusioncore.tools.FusionConfig;
 import dev.allofus.fusioncore.tools.FusionConfigStore;
@@ -73,6 +73,14 @@ public class BootstrapActivity extends AppCompatActivity {
     }
 
     private void runBootstrapFlow(String targetPackage) {
+        Context gameContext;
+        try {
+            gameContext = createPackageContext(targetPackage, CONTEXT_IGNORE_SECURITY | CONTEXT_INCLUDE_CODE);
+        } catch (Exception e) {
+            failAndFinish("Failed to create package context for target package: " + targetPackage, e);
+            return;
+        }
+
         Intent launchIntent = getPackageManager().getLaunchIntentForPackage(targetPackage);
         if (launchIntent == null) {
             failAndFinish("No launch intent for target package: " + targetPackage, null);
@@ -84,20 +92,30 @@ public class BootstrapActivity extends AppCompatActivity {
             launcher = launchIntent.resolveActivity(getPackageManager());
         }
 
+        var overrideActivity = FusionSettings.getActivityOverrideForGame(this, targetPackage);
+        try {
+            if (!overrideActivity.equals("Automatic")) {
+                var overrideClass = gameContext.getClassLoader().loadClass(overrideActivity);
+                if (overrideClass != null) {
+                    launcher = new ComponentName(targetPackage, overrideActivity);
+                    Log.i(TAG, "Using override activity " + overrideActivity);
+                    runOnUiThread(() -> Toast.makeText(this, "Using override activity " + overrideActivity, Toast.LENGTH_LONG).show());
+                } else {
+                    Log.i(TAG, "Failed to find override activity " + overrideActivity);
+                    runOnUiThread(()-> Toast.makeText(this, "Failed to find override activity.", Toast.LENGTH_LONG).show());
+                }
+            }
+        } catch (Exception e) {
+            runOnUiThread(()-> Toast.makeText(this, "Exception when finding override activity.", Toast.LENGTH_LONG).show());
+            Log.e(TAG, "Failed to get override activity "+ overrideActivity, e);
+        }
+
         if (launcher == null) {
             failAndFinish("Failed to resolve launcher activity for target package: " + targetPackage, null);
             return;
         }
 
         final int targetOrientation = resolveTargetOrientation(launcher);
-
-        Context gameContext;
-        try {
-            gameContext = createPackageContext(targetPackage, CONTEXT_IGNORE_SECURITY | CONTEXT_INCLUDE_CODE);
-        } catch (Exception e) {
-            failAndFinish("Failed to create package context for target package: " + targetPackage, e);
-            return;
-        }
 
         boolean useOriginalLibUnity = getIntent().getBooleanExtra(EXTRA_USE_ORIGINAL_LIBUNITY, false);
         try {
@@ -120,8 +138,9 @@ public class BootstrapActivity extends AppCompatActivity {
         try {
             ClassLoaderHooks.installHooks(gameContext.getClassLoader());
             PackageManagerHooks.installHooks(getPackageManager());
-            InstrumentationHooks.install();
+            InstrumentationHooks.install(getApplicationContext());
             UnityPlayerHooks.installHooks(gameContext);
+            ResourceHooks.installHooks(gameContext.getResources(), getApplicationContext().getResources());
         } catch (Exception e) {
             Log.e(TAG, "Failed to install base hooks", e);
         }
