@@ -8,8 +8,59 @@ jclass jniBridge = nullptr;
 jmethodID setLoadingStateID = nullptr;
 jmethodID setLoadingTextID = nullptr;
 
-#define SEARCH_NUM 3
+jobject appClassLoader = nullptr;
+jmethodID loadClassMethod = nullptr;
+
 #define TAG "Fusion.JNI"
+
+jclass find_class_in_app_classloader(JNIEnv *env, const char *className) {
+    if (!appClassLoader)
+    {
+        jclass activityThreadClass = env->FindClass("android/app/ActivityThread");
+        jmethodID currentActivityThreadMethod = env->GetStaticMethodID(activityThreadClass,
+                                                                       "currentActivityThread",
+                                                                       "()Landroid/app/ActivityThread;");
+        jobject activityThread = env->CallStaticObjectMethod(activityThreadClass,
+                                                             currentActivityThreadMethod);
+
+        jmethodID getApplicationMethod = env->GetMethodID(activityThreadClass, "getApplication",
+                                                          "()Landroid/app/Application;");
+        jobject application = env->CallObjectMethod(activityThread, getApplicationMethod);
+
+        jclass applicationClass = env->GetObjectClass(application);
+        jmethodID getClassLoaderMethod = env->GetMethodID(applicationClass, "getClassLoader",
+                                                          "()Ljava/lang/ClassLoader;");
+        jobject classLoader = env->CallObjectMethod(application, getClassLoaderMethod);
+        appClassLoader = env->NewGlobalRef(classLoader);
+
+        env->DeleteLocalRef(activityThreadClass);
+        env->DeleteLocalRef(activityThread);
+        env->DeleteLocalRef(application);
+        env->DeleteLocalRef(applicationClass);
+        env->DeleteLocalRef(classLoader);
+    }
+
+
+    if (!loadClassMethod)
+    {
+        jclass classLoaderClass = env->GetObjectClass(appClassLoader);
+        loadClassMethod = env->GetMethodID(classLoaderClass, "loadClass",
+                                           "(Ljava/lang/String;)Ljava/lang/Class;");
+        env->DeleteLocalRef(classLoaderClass);
+    }
+
+    jstring classNameUtf = env->NewStringUTF(className);
+    jclass clazz = (jclass) env->CallObjectMethod(appClassLoader, loadClassMethod, classNameUtf);
+
+    if (!clazz) {
+        log(LogLevel::ERROR, TAG, "Failed to find JniBridge class via explicit ClassLoader!");
+        env->ExceptionClear();
+        return nullptr;
+    }
+
+    return clazz;
+}
+
 
 extern "C" void init_java(JavaVM *vm) {
     if (g_vm != nullptr) {
@@ -21,10 +72,11 @@ extern "C" void init_java(JavaVM *vm) {
     JNIEnv *env = getJNIEnv();
 
     {
-        jclass jniBridgeClass = env->FindClass("dev/allofus/fusioncore/tools/JniBridge");
+        jclass jniBridgeClass = find_class_in_app_classloader(env, "dev/allofus/fusioncore/tools/JniBridge");
         if (!jniBridgeClass)
         {
             log(LogLevel::ERROR, TAG, "Failed to find JniBridge class!");
+            env->ExceptionClear();
             return;
         }
 
@@ -125,15 +177,15 @@ JNIEnv* getJNIEnv() {
 
 jobject getUnityActivity(JNIEnv* env)
 {
-    constexpr const char *unityClasses[SEARCH_NUM]{
+    constexpr const char *unityClasses[]{
             "com/unity3d/player/UnityPlayer",
             "com/unity3d/player/UnityPlayerForGameActivity",
             "com/unity3d/player/UnityPlayerForActivityOrService",
     };
 
     jclass unityPlayerClass = nullptr;
-    for (int i = 0; i < SEARCH_NUM; ++i) {
-        unityPlayerClass = env->FindClass(unityClasses[i]);
+    for (auto unityClass : unityClasses) {
+        unityPlayerClass = env->FindClass(unityClass);
         if (unityPlayerClass) {
             break;
         }

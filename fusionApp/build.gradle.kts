@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("com.google.protobuf")
 }
 
 // we have a custom pine build that fixes 16KB library problem.
@@ -10,6 +11,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.coordinatorlayout:coordinatorlayout:1.3.0")
     implementation("com.google.android.material:material:1.14.0")
+    implementation("com.google.protobuf:protobuf-javalite:4.36.1")
     implementation(files(pineAar))
 }
 
@@ -58,8 +60,11 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // we don't need minify tbh
+            isMinifyEnabled = false
+            // this can mess up ResourceHooks
+            //noinspection NotShrinkingResources
+            isShrinkResources = false
             proguardFiles("proguard-unity.txt", getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
@@ -76,3 +81,18 @@ android {
     }
 }
 
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:4.35.1"
+    }
+    generateProtoTasks {
+        all().forEach { task ->
+            task.builtins {
+                create("java") {
+                    option("lite")
+                }
+            }
+        }
+    }
+}
