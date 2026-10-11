@@ -547,23 +547,6 @@ public class BootstrapActivity extends AppCompatActivity {
             }
         }
     }
-
-    private static void copyFile(File source, File target) throws IOException {
-        File parent = target.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs()) {
-            throw new IOException("Failed to create parent directory: " + parent.getAbsolutePath());
-        }
-
-        byte[] buffer = new byte[8192];
-        try (FileInputStream in = new FileInputStream(source);
-             FileOutputStream out = new FileOutputStream(target, false)) {
-            int count;
-            while ((count = in.read(buffer)) != -1) {
-                out.write(buffer, 0, count);
-            }
-        }
-    }
-
     private void ensureManagedDllsForMono(File GameDir) {
         File managedDir = new File(GameDir, "mono");
         File[] existingFiles = managedDir.listFiles();

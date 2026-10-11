@@ -56,29 +56,6 @@ public class UnityUtils {
 
         return null;
     }
-
-    public static boolean IsMetadataObfuscated(File metadata) {
-        if (!metadata.exists())  { //very rare scenario.
-            return true;
-        }
-
-        try (FileInputStream in = new FileInputStream(metadata)) {
-            byte[] header = new byte[4];
-            int bytesRead = in.read(header);
-            if (bytesRead < 4) {
-                return true;
-            }
-
-            boolean matchesMagic = (header[0] & 0xFF) == 0xAF &&
-                                   (header[1] & 0xFF) == 0x1B &&
-                                   (header[2] & 0xFF) == 0xB1 &&
-                                   (header[3] & 0xFF) == 0xFA;
-
-            return !matchesMagic;
-        } catch (IOException e) {
-            return false;
-        }
-    }
     private static String readAsciiString(RandomAccessFile reader, int maxLength) throws IOException {
         StringBuilder builder = new StringBuilder(maxLength);
 
