@@ -431,8 +431,8 @@ public class BootstrapActivity extends AppCompatActivity {
         }
         return map;
     }
+    //since we arent overriding any of unity's actual assets. there is no point in extracting any of the bin/data files except for the essential ones (for now)
     static boolean ShouldExtractApkAsset(ZipEntry entry){
-        //for some games, bin/data is filled with a bunch of junk files that arent needed
         File file = new File(entry.getName());
         String parent = file.getParent();
         if(parent == null){
