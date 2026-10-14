@@ -35,6 +35,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.zip.ZipEntry;
 
 import dev.allofus.fusioncore.hooks.InstrumentationHooks;
 import dev.allofus.fusioncore.hooks.ActivityManagerHooks;
@@ -430,6 +431,18 @@ public class BootstrapActivity extends AppCompatActivity {
         }
         return map;
     }
+    static boolean ShouldExtractApkAsset(ZipEntry entry){
+        //for some games, bin/data is filled with a bunch of junk files that arent needed
+        File file = new File(entry.getName());
+        String parent = file.getParent();
+        if(parent == null){
+            return true;
+        }
+        if(!parent.equals("assets/bin/Data")){
+            return true;
+        }
+        return UnityUtils.lookupMap.containsKey(file.getName());
+    }
     private FusionConfig prepareConfig(Context appContext,
                                        Context gameContext,
                                        ComponentName launcherComponent,
@@ -450,7 +463,7 @@ public class BootstrapActivity extends AppCompatActivity {
         setPhaseStatus(getString(R.string.bootstrap_status_copy_assets));
         File Assets = new File(dataOnSdCard, "Assets");
         File PersistentData = new File(dataOnSdCard, "PersistentData");
-        boolean copied = Utilities.copyAssets(gameContext.getApplicationInfo(), Assets);
+        boolean copied = Utilities.copyAssets(gameContext.getApplicationInfo(), Assets, BootstrapActivity::ShouldExtractApkAsset);
         if (!copied) {
             Log.e(TAG, "Failed to copy Unity Data assets! BepInEx may not work correctly.");
         }
