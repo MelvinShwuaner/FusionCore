@@ -34,6 +34,8 @@ Previous versions of FusionCore required adding the game activity to the manifes
 
 Just download the APK (or build the app, if not available), and run!
 
+IF you are using il2cpp2mono in your game, you CANNOT just use all of the original PC dlls. Unity's managed dlls are platform specific. this also goes for libraries like FMOD too.
+
 ## Build
 
 Use the Gradle wrapper from the repository root:
