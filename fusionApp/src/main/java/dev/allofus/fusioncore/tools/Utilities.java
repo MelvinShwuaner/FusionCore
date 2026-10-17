@@ -173,6 +173,7 @@ public class Utilities {
 
                     File target = new File(outputFolder, name.substring("assets/".length()));
                     if (!target.getCanonicalPath().startsWith(outputRoot)) continue;
+                    if (target.isFile() && target.length() == entry.getSize()) continue;
 
                     File parent = target.getParentFile();
                     if (parent != null && !parent.isDirectory() && !parent.mkdirs()) {
